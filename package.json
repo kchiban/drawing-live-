@@ -34,9 +34,7 @@
   "engines": {
     "node": ">=14.0.0",
     "npm": ">=6.0.0"
-  }
-}
-{
+  },
   "name": "collaborative-drawing-board",
   "version": "1.0.0",
   "main": "server.js",
