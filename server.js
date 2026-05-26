@@ -1,8 +1,3 @@
-/**
- * Real-time Collaborative Drawing Server
- * Backend implementation with Socket.io, Express, and IP tracking
- */
-
 const express = require('express');
 const http = require('http');
 const socketIo = require('socket.io');
@@ -12,68 +7,66 @@ const cors = require('cors');
 const app = express();
 const server = http.createServer(app);
 const io = socketIo(server, {
-  cors: {
-    origin: "*",
-    methods: ["GET", "POST"]
-  }
+  cors: { origin: "*", methods: ["GET", "POST"], credentials: true },
+  transports: ['websocket', 'polling']
 });
 
 // Middleware
 app.use(cors());
 app.use(express.json());
-app.use(express.static('public'));
 
-// ==================== DATA STRUCTURES ====================
+// IMPORTANT: Serve public files BEFORE routes
+console.log('__dirname:', __dirname);
+console.log('public path:', path.join(__dirname, 'public'));
 
-// User tracking: Map of socket.id -> user data
+app.use(express.static(path.join(__dirname, 'public')));
+
+// Routes
+app.get('/', (req, res) => {
+  console.log('GET / - sending index.html');
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+app.get('/stats', (req, res) => {
+  console.log('GET /stats - sending stats.html');
+  res.sendFile(path.join(__dirname, 'public', 'stats.html'));
+});
+
+app.get('/stats.html', (req, res) => {
+  console.log('GET /stats.html - sending stats.html');
+  res.sendFile(path.join(__dirname, 'public', 'stats.html'));
+});
+
+app.get('/api/health', (req, res) => {
+  console.log('GET /api/health');
+  res.json({ status: 'ok', time: new Date().toISOString() });
+});
+
+// Data structures
 const users = new Map();
-
-// IP tracking: Map of IP -> { joinTime, socketId, userName, userColor }
 const ipTracker = new Map();
-
-// Banned IPs: Set of banned IP addresses
 const bannedIps = new Set();
-
-// Drawing history for new users joining
 const drawingHistory = [];
 
-// ==================== UTILITY FUNCTIONS ====================
-
-/**
- * Extract client IP address from socket connection
- * Handles proxies and direct connections
- */
+// Helper functions
 function getClientIp(socket) {
   let ip = socket.handshake.address;
-  
-  // Check for forwarded IP (from proxies)
   const forwarded = socket.handshake.headers['x-forwarded-for'];
   if (forwarded) {
     ip = forwarded.split(',')[0].trim();
   }
-  
   return ip;
 }
 
-/**
- * Generate random color for user
- */
 function generateUserColor() {
-  const colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA07A', '#98D8C8', 
-                  '#F7DC6F', '#BB8FCE', '#85C1E2', '#F8B88B', '#6C5CE7'];
+  const colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA07A', '#98D8C8', '#F7DC6F', '#BB8FCE', '#85C1E2', '#F8B88B', '#6C5CE7'];
   return colors[Math.floor(Math.random() * colors.length)];
 }
 
-/**
- * Get user count online
- */
 function getOnlineCount() {
   return users.size;
 }
 
-/**
- * Get all connected users info (for stats page)
- */
 function getUsersInfo() {
   return Array.from(users.values()).map(user => ({
     socketId: user.socketId,
@@ -85,9 +78,6 @@ function getUsersInfo() {
   }));
 }
 
-/**
- * Get all IP tracking data
- */
 function getIpTrackingData() {
   return Array.from(ipTracker.entries()).map(([ip, data]) => ({
     ip,
@@ -99,51 +89,23 @@ function getIpTrackingData() {
   }));
 }
 
-/**
- * Ban an IP address
- */
-function banIp(ip) {
-  bannedIps.add(ip);
-  // Disconnect any users from this IP
-  const userToBan = Array.from(users.values()).find(u => u.ip === ip);
-  if (userToBan) {
-    const socket = io.sockets.sockets.get(userToBan.socketId);
-    if (socket) {
-      socket.disconnect(true);
-    }
-  }
-  return true;
-}
-
-/**
- * Unban an IP address
- */
-function unbanIp(ip) {
-  bannedIps.delete(ip);
-  return true;
-}
-
-// ==================== SOCKET.IO EVENTS ====================
-
+// Socket.io events
 io.on('connection', (socket) => {
   const clientIp = getClientIp(socket);
-  
   console.log(`[${new Date().toISOString()}] New connection from IP: ${clientIp}`);
 
-  // Check if IP is banned
   if (bannedIps.has(clientIp)) {
-    console.log(`[${new Date().toISOString()}] Banned IP attempted connection: ${clientIp}`);
-    socket.emit('ip_banned', { message: 'Your IP address has been banned' });
+    console.log(`Banned IP attempted: ${clientIp}`);
+    socket.emit('ip_banned', { message: 'Your IP has been banned' });
     socket.disconnect(true);
     return;
   }
 
-  // Handle user join
+  // User join
   socket.on('user_join', (data) => {
     const userName = data.userName || `Anonymous #${Math.floor(Math.random() * 10000)}`;
     const userColor = generateUserColor();
 
-    // Create user object
     const user = {
       socketId: socket.id,
       userName,
@@ -154,20 +116,11 @@ io.on('connection', (socket) => {
       cursorY: 0
     };
 
-    // Store user
     users.set(socket.id, user);
+    ipTracker.set(clientIp, { joinTime: user.joinTime, socketId: socket.id, userName, userColor });
 
-    // Update IP tracker
-    ipTracker.set(clientIp, {
-      joinTime: user.joinTime,
-      socketId: socket.id,
-      userName,
-      userColor
-    });
+    console.log(`User joined: ${userName}`);
 
-    console.log(`[${new Date().toISOString()}] User joined: ${userName} (IP: ${clientIp})`);
-
-    // Send welcome message with drawing history and user info
     socket.emit('welcome', {
       socketId: socket.id,
       userName,
@@ -177,7 +130,6 @@ io.on('connection', (socket) => {
       connectedUsers: getUsersInfo()
     });
 
-    // Broadcast user joined to all clients
     io.emit('user_joined', {
       userName,
       userColor,
@@ -187,7 +139,7 @@ io.on('connection', (socket) => {
     });
   });
 
-  // Handle drawing events
+  // Drawing
   socket.on('draw', (data) => {
     const user = users.get(socket.id);
     if (!user) return;
@@ -200,17 +152,15 @@ io.on('connection', (socket) => {
       timestamp: Date.now()
     };
 
-    // Store in history (limit to last 5000 events)
     drawingHistory.push(drawEvent);
     if (drawingHistory.length > 5000) {
       drawingHistory.shift();
     }
 
-    // Broadcast to all other clients
     socket.broadcast.emit('draw', drawEvent);
   });
 
-  // Handle cursor position updates
+  // Cursor
   socket.on('cursor_move', (data) => {
     const user = users.get(socket.id);
     if (!user) return;
@@ -218,7 +168,6 @@ io.on('connection', (socket) => {
     user.cursorX = data.x;
     user.cursorY = data.y;
 
-    // Broadcast cursor position
     io.emit('user_cursor', {
       socketId: socket.id,
       userName: user.userName,
@@ -228,22 +177,16 @@ io.on('connection', (socket) => {
     });
   });
 
-  // Handle clear canvas
+  // Clear canvas
   socket.on('clear_canvas', () => {
     const user = users.get(socket.id);
     if (!user) return;
 
-    // Clear drawing history
     drawingHistory.length = 0;
-
-    // Broadcast clear event
-    io.emit('canvas_cleared', {
-      clearedBy: user.userName,
-      socketId: socket.id
-    });
+    io.emit('canvas_cleared', { clearedBy: user.userName, socketId: socket.id });
   });
 
-  // Handle chat/messages
+  // Messages
   socket.on('send_message', (data) => {
     const user = users.get(socket.id);
     if (!user) return;
@@ -259,14 +202,13 @@ io.on('connection', (socket) => {
     io.emit('receive_message', message);
   });
 
-  // Handle disconnection
+  // Disconnect
   socket.on('disconnect', () => {
     const user = users.get(socket.id);
     if (user) {
-      console.log(`[${new Date().toISOString()}] User disconnected: ${user.userName} (IP: ${user.ip})`);
+      console.log(`User disconnected: ${user.userName}`);
       users.delete(socket.id);
 
-      // Broadcast user left
       io.emit('user_left', {
         userName: user.userName,
         socketId: socket.id,
@@ -276,12 +218,7 @@ io.on('connection', (socket) => {
   });
 });
 
-// ==================== API ENDPOINTS ====================
-
-/**
- * GET /api/stats
- * Return all statistics for admin dashboard
- */
+// API endpoints
 app.get('/api/stats', (req, res) => {
   res.json({
     onlineCount: getOnlineCount(),
@@ -293,66 +230,60 @@ app.get('/api/stats', (req, res) => {
   });
 });
 
-/**
- * POST /api/ban-ip
- * Ban an IP address
- * Body: { ip: "xxx.xxx.xxx.xxx" }
- */
 app.post('/api/ban-ip', (req, res) => {
   const { ip } = req.body;
-  if (!ip) {
-    return res.status(400).json({ error: 'IP address required' });
+  if (!ip) return res.status(400).json({ error: 'IP required' });
+  
+  bannedIps.add(ip);
+  const user = Array.from(users.values()).find(u => u.ip === ip);
+  if (user) {
+    io.sockets.sockets.get(user.socketId)?.disconnect(true);
   }
   
-  banIp(ip);
-  res.json({ success: true, message: `IP ${ip} banned successfully`, bannedIps: Array.from(bannedIps) });
+  res.json({ success: true, bannedIps: Array.from(bannedIps) });
 });
 
-/**
- * POST /api/unban-ip
- * Unban an IP address
- * Body: { ip: "xxx.xxx.xxx.xxx" }
- */
 app.post('/api/unban-ip', (req, res) => {
   const { ip } = req.body;
-  if (!ip) {
-    return res.status(400).json({ error: 'IP address required' });
-  }
+  if (!ip) return res.status(400).json({ error: 'IP required' });
   
-  unbanIp(ip);
-  res.json({ success: true, message: `IP ${ip} unbanned successfully`, bannedIps: Array.from(bannedIps) });
+  bannedIps.delete(ip);
+  res.json({ success: true, bannedIps: Array.from(bannedIps) });
 });
 
-/**
- * POST /api/kick-user
- * Kick a user by socket ID
- * Body: { socketId: "socket-id" }
- */
 app.post('/api/kick-user', (req, res) => {
   const { socketId } = req.body;
-  if (!socketId) {
-    return res.status(400).json({ error: 'Socket ID required' });
-  }
+  if (!socketId) return res.status(400).json({ error: 'Socket ID required' });
 
   const socket = io.sockets.sockets.get(socketId);
   if (socket) {
     socket.disconnect(true);
-    res.json({ success: true, message: 'User kicked successfully' });
+    res.json({ success: true });
   } else {
     res.status(404).json({ error: 'User not found' });
   }
 });
 
-// ==================== START SERVER ====================
+// Catch-all - serve index.html for any unknown route (SPA support)
+app.use((req, res) => {
+  console.log(`404 - ${req.method} ${req.path} - serving index.html`);
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
 
+// Error handling
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught Exception:', err);
+});
+
+// Start server
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
+server.listen(PORT, '0.0.0.0', () => {
   console.log(`
-╔════════════════════════════════════════════╗
-║   Real-time Collaborative Drawing Server   ║
-║              Server Running On             ║
-║              http://localhost:${PORT}              ║
-╚════════════════════════════════════════════╝
+╔═══════════════════════════════════════════════════╗
+║  🎨 Collaborative Drawing Board                  ║
+║  ✅ Server Running on Port ${PORT}                    ║
+║  📍 http://localhost:${PORT}                        ║
+╚═══════════════════════════════════════════════════╝
   `);
 });
 
