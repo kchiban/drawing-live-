@@ -1,0 +1,11 @@
+version: "3.9"
+services:
+  web:
+    image: nginx
+    configs:
+      - source: my_nginx_config
+        target: /etc/nginx/nginx.conf
+
+configs:
+  my_nginx_config:
+    file: ./nginx.conf
